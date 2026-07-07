@@ -1,0 +1,43 @@
+<svg width="1280" height="420" viewBox="0 0 1280 420" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1280" y2="420" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#07111F"/>
+      <stop offset="0.55" stop-color="#111827"/>
+      <stop offset="1" stop-color="#1E1B4B"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="120" y1="90" x2="1170" y2="370" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#38BDF8"/>
+      <stop offset="0.5" stop-color="#A78BFA"/>
+      <stop offset="1" stop-color="#34D399"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="18" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <style>
+      .title{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Arial,sans-serif;font-weight:800;letter-spacing:-2px;fill:#F8FAFC}
+      .sub{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Arial,sans-serif;font-weight:500;fill:#CBD5E1}
+      .mono{font-family:"SFMono-Regular","Cascadia Code",Menlo,Consolas,monospace;fill:#E2E8F0}
+      .label{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Arial,sans-serif;font-weight:700;fill:#E0F2FE}
+    </style>
+  </defs>
+  <rect width="1280" height="420" rx="34" fill="url(#bg)"/>
+  <circle cx="1050" cy="80" r="180" fill="#2563EB" opacity="0.20" filter="url(#glow)"/>
+  <circle cx="220" cy="330" r="190" fill="#10B981" opacity="0.16" filter="url(#glow)"/>
+  <path d="M90 315C235 185 340 370 485 235C638 93 780 155 930 120C1035 96 1110 122 1190 170" stroke="url(#accent)" stroke-width="7" stroke-linecap="round" opacity="0.9"/>
+  <rect x="76" y="70" width="1128" height="280" rx="28" fill="#020617" opacity="0.58" stroke="#334155"/>
+  <text x="112" y="154" class="title" font-size="74">aicodex</text>
+  <text x="112" y="205" class="sub" font-size="30">Local Codex-like AI coding workspace for Mac</text>
+  <text x="112" y="263" class="mono" font-size="24">Ollama • Aider • Open WebUI • Smart Router • Safe MCP • Project Memory</text>
+  <g transform="translate(875 112)">
+    <rect width="270" height="150" rx="18" fill="#0F172A" stroke="#475569"/>
+    <circle cx="38" cy="38" r="9" fill="#EF4444"/>
+    <circle cx="66" cy="38" r="9" fill="#F59E0B"/>
+    <circle cx="94" cy="38" r="9" fill="#22C55E"/>
+    <text x="34" y="82" class="mono" font-size="19">$ aicodex run</text>
+    <text x="34" y="116" class="label" font-size="19">GUI + Agent + Memory</text>
+  </g>
+</svg>

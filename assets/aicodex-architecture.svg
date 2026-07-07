@@ -1,0 +1,31 @@
+<svg width="1280" height="720" viewBox="0 0 1280 720" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1280" y2="720" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#020617"/><stop offset="1" stop-color="#111827"/>
+    </linearGradient>
+    <linearGradient id="box" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#1E293B"/><stop offset="1" stop-color="#0F172A"/></linearGradient>
+    <style>
+      .h{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Arial,sans-serif;font-weight:800;fill:#F8FAFC}
+      .t{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Arial,sans-serif;font-weight:600;fill:#E2E8F0}
+      .s{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Arial,sans-serif;font-weight:500;fill:#94A3B8}
+      .m{font-family:"SFMono-Regular",Menlo,Consolas,monospace;fill:#BAE6FD}
+    </style>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth"><path d="M2,2 L10,6 L2,10" fill="#38BDF8"/></marker>
+  </defs>
+  <rect width="1280" height="720" rx="28" fill="url(#bg)"/>
+  <text x="70" y="76" class="h" font-size="44">aicodex Architecture</text>
+  <text x="70" y="118" class="s" font-size="22">A user-owned local AI coding system with GUI, agent, router, safe tools and project hygiene.</text>
+
+  <g id="box1" transform="translate(70 190)"><rect width="260" height="110" rx="18" fill="url(#box)" stroke="#334155"/><text x="28" y="44" class="t" font-size="24">Open WebUI</text><text x="28" y="78" class="s" font-size="18">Local ChatGPT-like GUI</text></g>
+  <g id="box2" transform="translate(70 385)"><rect width="260" height="110" rx="18" fill="url(#box)" stroke="#334155"/><text x="28" y="44" class="t" font-size="24">Aider</text><text x="28" y="78" class="s" font-size="18">Repo editing agent</text></g>
+  <g id="box3" transform="translate(450 190)"><rect width="320" height="110" rx="18" fill="url(#box)" stroke="#38BDF8"/><text x="28" y="44" class="t" font-size="24">Smart Router</text><text x="28" y="78" class="m" font-size="17">127.0.0.1:5050/v1</text></g>
+  <g id="box4" transform="translate(450 385)"><rect width="320" height="110" rx="18" fill="url(#box)" stroke="#22C55E"/><text x="28" y="44" class="t" font-size="24">Safe MCP Tools</text><text x="28" y="78" class="s" font-size="18">filesystem • git • shell</text></g>
+  <g id="box5" transform="translate(900 145)"><rect width="300" height="300" rx="22" fill="url(#box)" stroke="#A78BFA"/><text x="28" y="44" class="t" font-size="25">Ollama Models</text><text x="28" y="90" class="s" font-size="18">Qwen3-Coder 30B</text><text x="28" y="126" class="s" font-size="18">DeepSeek-R1 32B</text><text x="28" y="162" class="s" font-size="18">Qwen3 30B</text><text x="28" y="198" class="s" font-size="18">Qwen2.5-VL 7B</text><text x="28" y="234" class="s" font-size="18">nomic-embed-text</text></g>
+  <g id="box6" transform="translate(900 515)"><rect width="300" height="110" rx="18" fill="url(#box)" stroke="#F59E0B"/><text x="28" y="44" class="t" font-size="24">Project Memory</text><text x="28" y="78" class="s" font-size="18">.ai-memory + archives</text></g>
+
+  <path d="M330 245H450" stroke="#38BDF8" stroke-width="4" marker-end="url(#arrow)"/>
+  <path d="M770 245H900" stroke="#38BDF8" stroke-width="4" marker-end="url(#arrow)"/>
+  <path d="M330 440H450" stroke="#22C55E" stroke-width="4" marker-end="url(#arrow)"/>
+  <path d="M770 440C840 440 840 570 900 570" stroke="#F59E0B" stroke-width="4" marker-end="url(#arrow)" fill="none"/>
+  <path d="M610 300V385" stroke="#94A3B8" stroke-width="3" stroke-dasharray="8 8" marker-end="url(#arrow)"/>
+</svg>
