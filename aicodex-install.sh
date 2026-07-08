@@ -50,8 +50,13 @@ die() {
 prompt() {
   local message="$1"
   local result
-  printf "%s" "$message"
-  IFS= read -r result
+
+  # Print prompt directly to terminal, not stdout.
+  # This keeps command substitution clean:
+  # choice="$(prompt "Select option: ")" captures only "1", not "Select option: 1".
+  printf "%s" "$message" >/dev/tty
+  IFS= read -r result </dev/tty
+
   echo "$result"
 }
 
@@ -116,7 +121,7 @@ check_brew_exists() {
   echo "1) Try installing Homebrew"
   echo "2) Exit"
   local choice
-  choice="$(prompt "Select: ")"
+  choice="$(prompt "Enter option number: ")"
 
   if [ "$choice" = "1" ]; then
     /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
@@ -175,7 +180,7 @@ install_brew_tools() {
   echo "1) Yes, install Ollama and VS Code into ~/Applications"
   echo "2) Skip GUI casks"
   local cask_choice
-  cask_choice="$(prompt "Select: ")"
+  cask_choice="$(prompt "Enter option number: ")"
 
   if [ "$cask_choice" = "1" ]; then
     brew install --cask --appdir="$HOME/Applications" ollama || true
@@ -715,8 +720,13 @@ say() {
 prompt() {
   local message="$1"
   local result
-  printf "%s" "$message"
-  IFS= read -r result
+
+  # Print prompt directly to terminal, not stdout.
+  # This keeps command substitution clean:
+  # choice="$(prompt "Select option: ")" captures only "1", not "Select option: 1".
+  printf "%s" "$message" >/dev/tty
+  IFS= read -r result </dev/tty
+
   echo "$result"
 }
 
@@ -751,7 +761,7 @@ tool_issue_menu() {
   echo "3) Exit"
 
   local choice
-  choice="$(prompt "Select: ")"
+  choice="$(prompt "Enter option number: ")"
 
   case "$choice" in
     1) repair_tool ;;
@@ -821,7 +831,7 @@ repair_tool() {
   echo "1) Yes"
   echo "2) Skip"
   local npm_choice
-  npm_choice="$(prompt "Select: ")"
+  npm_choice="$(prompt "Enter option number: ")"
 
   if [ "$npm_choice" = "1" ]; then
     "$npm_bin" install -g cline || true
@@ -834,7 +844,7 @@ repair_tool() {
   echo "1) Yes"
   echo "2) Skip"
   local model_choice
-  model_choice="$(prompt "Select: ")"
+  model_choice="$(prompt "Enter option number: ")"
 
   if [ "$model_choice" = "1" ]; then
     for model in "${MODELS[@]}"; do
@@ -1026,7 +1036,7 @@ reset_tool() {
   echo "8) Cancel"
 
   local choice
-  choice="$(prompt "Select: ")"
+  choice="$(prompt "Enter option number: ")"
 
   case "$choice" in
     1) rm -f "$AICODEX_LOGS"/*.log 2>/dev/null || true ;;
@@ -1049,7 +1059,7 @@ update_prompt() {
   echo "2) Skip update"
 
   local choice
-  choice="$(prompt "Select: ")"
+  choice="$(prompt "Enter option number: ")"
 
   if [ "$choice" != "1" ]; then
     return 0
@@ -1142,7 +1152,7 @@ secret_scan() {
     echo "1) Continue"
     echo "2) Exit and fix project"
     local choice
-    choice="$(prompt "Select: ")"
+    choice="$(prompt "Enter option number: ")"
     [ "$choice" = "2" ] && exit 1
   else
     echo "✓ No obvious secret files found"
@@ -1163,7 +1173,7 @@ git_hygiene() {
     echo "2) Continue without Git"
     echo "3) Exit"
     local choice
-    choice="$(prompt "Select: ")"
+    choice="$(prompt "Enter option number: ")"
     case "$choice" in
       1) git init ;;
       2) return 0 ;;
@@ -1177,7 +1187,7 @@ git_hygiene() {
     echo "2) Continue without baseline"
     echo "3) Exit"
     local choice
-    choice="$(prompt "Select: ")"
+    choice="$(prompt "Enter option number: ")"
     case "$choice" in
       1) git add .; git commit -m "Initial baseline before AI-assisted work" || true ;;
       2) echo "Continuing without baseline." ;;
@@ -1193,7 +1203,7 @@ git_hygiene() {
     echo "3) Show git diff"
     echo "4) Exit"
     local choice
-    choice="$(prompt "Select: ")"
+    choice="$(prompt "Enter option number: ")"
     case "$choice" in
       1) git add .; git commit -m "Baseline before AI-assisted work" || true ;;
       2) echo "Continuing without baseline commit." ;;
@@ -1225,7 +1235,7 @@ restore_archive_if_needed() {
   echo "1) Restore archive"
   echo "2) Generate fresh memory"
   local choice
-  choice="$(prompt "Select: ")"
+  choice="$(prompt "Enter option number: ")"
 
   [ "$choice" = "1" ] && tar -xzf "$latest" -C .
 }
@@ -1265,7 +1275,7 @@ select_project() {
   echo "3) Reopen last project"
 
   local choice
-  choice="$(prompt "Select: ")"
+  choice="$(prompt "Enter option number: ")"
 
   local project_dir=""
 
@@ -1363,7 +1373,7 @@ run_full() {
   echo "1) Yes"
   echo "2) No"
   local choice
-  choice="$(prompt "Select: ")"
+  choice="$(prompt "Enter option number: ")"
 
   if [ "$choice" = "1" ]; then
     cd "$(cat "$LAST_PROJECT_FILE")" || exit 1
@@ -1497,7 +1507,7 @@ main() {
   echo "1) Yes"
   echo "2) Skip, run aicodex repair later"
   local choice
-  choice="$(prompt "Select: ")"
+  choice="$(prompt "Enter option number: ")"
 
   if [ "$choice" = "1" ]; then
     install_brew_tools
