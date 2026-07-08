@@ -97,7 +97,7 @@ Safe MCP tools + Git workflow
 - Project memory and archive/restore
 - Git hygiene before AI changes
 - Secret-file warning before AI starts
-- Tool repair/reset flow
+- Tool repair/reset/kill flow
 - User-owned installation directory
 - Local Python virtual environments
 - Local npm prefix to reduce permission issues
@@ -220,6 +220,7 @@ aicodex run
 | `aicodex aider` | Launch Aider for selected project |
 | `aicodex mcp` | Start safe MCP tools |
 | `aicodex archive` | Archive project AI memory |
+| `aicodex kill` | Stop AI Codex web UI, router, MCP, and free ports 5050/8080 |
 | `aicodex status` | Show running status |
 
 ---
@@ -477,7 +478,7 @@ git commit -m "AI-assisted improvement"
 - Git-based safety
 - project memory
 - project analysis
-- repair/reset flow
+- repair/reset/kill flow
 - reusable workflow across projects
 
 ---
@@ -502,6 +503,415 @@ But it is powerful for:
 - repo editing
 - local architecture review
 - repeatable project workflows
+
+
+---
+
+## Troubleshooting
+
+This section is for users who get stuck during launch, model selection, router startup, or Open WebUI loading.
+
+### 1. Cleanly stop AI Codex
+
+Use this first when the app freezes, the GUI does not refresh, or ports are already busy:
+
+```bash
+aicodex kill
+```
+
+This stops AI Codex user-space processes:
+
+```text
+Open WebUI
+AI Codex router
+Safe MCP server
+Processes running from ~/.aicodex-level1
+Ports 5050 and 8080
+```
+
+It does not stop Ollama by default because Ollama may be used by other tools.
+
+To stop Ollama too:
+
+```bash
+pkill -f "ollama serve" 2>/dev/null
+```
+
+After cleanup, start again:
+
+```bash
+aicodex run
+```
+
+---
+
+### 2. Port 5050 already in use
+
+Error example:
+
+```text
+[Errno 48] error while attempting to bind on address ('127.0.0.1', 5050): address already in use
+```
+
+This means the AI Codex router is already running or another process is using the router port.
+
+Fix:
+
+```bash
+aicodex kill
+```
+
+Manual check:
+
+```bash
+lsof -nP -iTCP:5050 -sTCP:LISTEN
+```
+
+Manual kill:
+
+```bash
+lsof -tiTCP:5050 -sTCP:LISTEN | xargs kill -9 2>/dev/null
+```
+
+Then start again:
+
+```bash
+aicodex run
+```
+
+---
+
+### 3. Port 8080 already in use
+
+Open WebUI uses port `8080`.
+
+Check:
+
+```bash
+lsof -nP -iTCP:8080 -sTCP:LISTEN
+```
+
+Fix:
+
+```bash
+aicodex kill
+```
+
+Manual kill:
+
+```bash
+lsof -tiTCP:8080 -sTCP:LISTEN | xargs kill -9 2>/dev/null
+```
+
+---
+
+### 4. `smart-auto` is not visible in Open WebUI
+
+Expected model:
+
+```text
+smart-auto
+```
+
+If you see direct models like below, Open WebUI is bypassing the router:
+
+```text
+qwen2.5-coder:14b
+deepseek-r1:32b
+qwen3-coder:30b
+qwen3:30b
+```
+
+Correct design:
+
+```text
+Open WebUI
+  ↓
+smart-auto
+  ↓
+AI Codex Router :5050
+  ↓
+Ollama specialist models
+```
+
+Check router models:
+
+```bash
+curl http://127.0.0.1:5050/v1/models
+```
+
+Expected:
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "smart-auto",
+      "object": "model"
+    }
+  ]
+}
+```
+
+If not correct:
+
+```bash
+aicodex kill
+aicodex repair
+aicodex run
+```
+
+Open WebUI should be launched by AI Codex with:
+
+```text
+ENABLE_OLLAMA_API=false
+ENABLE_OPENAI_API=true
+OPENAI_API_BASE_URL=http://127.0.0.1:5050/v1
+DEFAULT_MODELS=smart-auto
+```
+
+Users should not manually select specialist models. The router selects them internally.
+
+---
+
+### 5. Router health check
+
+Run:
+
+```bash
+curl http://127.0.0.1:5050/health
+```
+
+Expected:
+
+```json
+{"status":"ok","controller":"qwen3:30b","ollama":"http://127.0.0.1:11434"}
+```
+
+If it fails:
+
+```bash
+aicodex repair
+```
+
+Then:
+
+```bash
+aicodex run
+```
+
+---
+
+### 6. Ollama is not running
+
+Check:
+
+```bash
+curl http://127.0.0.1:11434/api/tags
+```
+
+If it fails, start Ollama:
+
+```bash
+ollama serve
+```
+
+In a new terminal, run:
+
+```bash
+aicodex run
+```
+
+---
+
+### 7. Model is loading slowly or GUI looks frozen
+
+Large models such as `qwen3-coder:30b` and `deepseek-r1:32b` can take time to load, especially on first run.
+
+Check loaded models:
+
+```bash
+ollama ps
+```
+
+Check system resource use:
+
+```bash
+top
+```
+
+For a full clean restart:
+
+```bash
+aicodex kill
+aicodex run
+```
+
+---
+
+### 8. Open WebUI log check
+
+If the browser opens but the UI is blank, slow, or stuck:
+
+```bash
+tail -100 ~/.aicodex-level1/logs/open-webui.log
+```
+
+Router log:
+
+```bash
+tail -100 ~/.aicodex-level1/logs/router.log
+```
+
+Ollama log, if created by the launcher:
+
+```bash
+tail -100 ~/.aicodex-level1/logs/ollama.log
+```
+
+---
+
+### 9. Homebrew permission issue
+
+If the installer cannot install packages with Brew, check:
+
+```bash
+brew doctor
+brew --prefix
+```
+
+If Brew is not writable by your user, an admin may need to fix ownership:
+
+```bash
+sudo chown -R "$USER":admin "$(brew --prefix)"
+chmod -R u+w "$(brew --prefix)"
+```
+
+The AI Codex installer itself is designed to avoid `sudo` during daily use.
+
+---
+
+### 10. Prompt says invalid option
+
+Users should type only the option number.
+
+Correct:
+
+```text
+1
+```
+
+Wrong:
+
+```text
+Select: 1
+```
+
+Current prompt format:
+
+```text
+Project selection:
+1) Start new project
+2) Select ongoing project
+3) Reopen last project
+Enter option number:
+```
+
+If the launcher still rejects valid numbers, reinstall the latest installer and run:
+
+```bash
+aicodex repair
+```
+
+---
+
+### 11. Tool issue vs project issue
+
+AI Codex separates tool problems from project hygiene problems.
+
+Tool issues:
+
+```text
+Open WebUI not starting
+Router not starting
+MCP server broken
+Python venv missing
+Port conflict
+GUI failed to launch
+```
+
+Use:
+
+```bash
+aicodex repair
+```
+
+or:
+
+```bash
+aicodex kill
+```
+
+Project issues:
+
+```text
+No Git repo
+Dirty Git status
+Missing .ai-memory
+Missing CONVENTIONS.md
+Possible secret files
+No baseline commit
+```
+
+These are not tool failures. AI Codex will ask whether to generate files, create a baseline commit, continue, or exit.
+
+---
+
+### 12. Useful recovery commands
+
+Status:
+
+```bash
+aicodex status
+```
+
+Clean stop:
+
+```bash
+aicodex kill
+```
+
+Repair tool files and environments:
+
+```bash
+aicodex repair
+```
+
+Reset tool config only:
+
+```bash
+aicodex reset
+```
+
+Start again:
+
+```bash
+aicodex run
+```
+
+Full manual process check:
+
+```bash
+ps aux | grep -E "aicodex|open-webui|uvicorn|safe_tools" | grep -v grep
+```
+
+Port check:
+
+```bash
+lsof -nP -iTCP:5050 -sTCP:LISTEN
+lsof -nP -iTCP:8080 -sTCP:LISTEN
+```
 
 ---
 
