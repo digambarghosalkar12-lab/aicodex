@@ -84,6 +84,8 @@ create_dirs() {
     "$AICODEX_NPM" \
     "$USER_BIN"
 
+  [ -f "$AICODEX_STATE/performance_mode" ] || echo "fast" > "$AICODEX_STATE/performance_mode"
+
   chmod -R u+rwX "$AICODEX_HOME" 2>/dev/null || true
 }
 
@@ -219,13 +221,16 @@ write_default_configs() {
   say "Writing/repairing default configs"
 
   write_file "$AICODEX_CONFIG/default-aider.conf.yml" <<'EOF'
-model: ollama_chat/deepseek-r1:32b
-editor-model: ollama_chat/qwen3-coder:30b
-architect: true
+# Optimized for local Codex-like coding on Apple Silicon.
+# Use one main coding-agent model instead of loading several 30B/32B models.
+model: ollama_chat/hf.co/unsloth/Qwen3-Coder-Next-GGUF:UD-Q2_K_XL
+editor-model: ollama_chat/hf.co/unsloth/Qwen3-Coder-Next-GGUF:UD-Q2_K_XL
+architect: false
 
 auto-commits: false
 dirty-commits: false
 show-diffs: true
+show-model-warnings: false
 
 map-tokens: 4096
 max-chat-history-tokens: 8192
@@ -234,6 +239,7 @@ read:
   - CONVENTIONS.md
   - .ai-memory/project-memory.md
   - .ai-memory/project-analysis.md
+  - .ai-memory/project-context.md
   - .ai-memory/decisions.md
   - .ai-memory/commands.md
 
@@ -336,29 +342,90 @@ import json
 import re
 
 OLLAMA_URL = "http://127.0.0.1:11434"
-CONTROLLER_MODEL = "qwen3:30b"
+CONTROLLER_MODEL = "qwen2.5-coder:14b"
 
 AICODEX_HOME = Path.home() / ".aicodex-level1"
 LAST_PROJECT_FILE = AICODEX_HOME / "state" / "last_project"
-MAX_PROJECT_CONTEXT_CHARS = 120000
+PERFORMANCE_MODE_FILE = AICODEX_HOME / "state" / "performance_mode"
+
+# Context is powerful but expensive. Keep it smaller by default.
+MAX_PROJECT_CONTEXT_CHARS_BY_MODE = {
+    "fast": 35000,
+    "balanced": 70000,
+    "full": 120000,
+}
+
+FAST_CODER_MODEL = "qwen2.5-coder:14b"
+BALANCED_CODER_MODEL = "hf.co/unsloth/Qwen3-Coder-Next-GGUF:UD-Q2_K_XL"
+FULL_CODER_MODEL = "hf.co/unsloth/Qwen3-Coder-Next-GGUF:UD-Q4_K_M"
+VISION_MODEL = "qwen2.5vl:7b"
+EMBED_MODEL = "nomic-embed-text"
 
 ALLOWED_TARGETS = {
-    "qwen3:30b",
-    "qwen3-coder:30b",
-    "deepseek-r1:32b",
-    "qwen2.5vl:7b",
-    "qwen2.5-coder:14b",
+    FAST_CODER_MODEL,
+    BALANCED_CODER_MODEL,
+    FULL_CODER_MODEL,
+    VISION_MODEL,
 }
 
 FAILOVER_MAP = {
-    "qwen3-coder:30b": ["qwen2.5-coder:14b", "qwen3:30b"],
-    "deepseek-r1:32b": ["qwen3:30b", "qwen3-coder:30b"],
-    "qwen2.5vl:7b": ["qwen3:30b"],
-    "qwen2.5-coder:14b": ["qwen3-coder:30b", "qwen3:30b"],
-    "qwen3:30b": ["deepseek-r1:32b"],
+    FULL_CODER_MODEL: [BALANCED_CODER_MODEL, FAST_CODER_MODEL],
+    BALANCED_CODER_MODEL: [FAST_CODER_MODEL],
+    FAST_CODER_MODEL: [BALANCED_CODER_MODEL],
+    VISION_MODEL: [FAST_CODER_MODEL],
 }
 
 app = FastAPI(title="AI Codex Smart Local Router")
+
+
+def get_performance_mode():
+    try:
+        if PERFORMANCE_MODE_FILE.exists():
+            mode = PERFORMANCE_MODE_FILE.read_text().strip().lower()
+            if mode in {"fast", "balanced", "full"}:
+                return mode
+    except Exception:
+        pass
+    return "fast"
+
+
+def max_project_context_chars():
+    return MAX_PROJECT_CONTEXT_CHARS_BY_MODE.get(get_performance_mode(), 35000)
+
+
+def model_profile():
+    """
+    fast     = lowest RAM/CPU, uses qwen2.5-coder:14b
+    balanced = optimized local Codex-like mode, uses Qwen3-Coder-Next Q2
+    full     = best local quality, uses Qwen3-Coder-Next Q4
+    """
+    mode = get_performance_mode()
+
+    if mode == "full":
+        return {
+            "general": FULL_CODER_MODEL,
+            "code": FULL_CODER_MODEL,
+            "architect": FULL_CODER_MODEL,
+            "vision": VISION_MODEL,
+            "quick": FAST_CODER_MODEL,
+        }
+
+    if mode == "balanced":
+        return {
+            "general": BALANCED_CODER_MODEL,
+            "code": BALANCED_CODER_MODEL,
+            "architect": BALANCED_CODER_MODEL,
+            "vision": VISION_MODEL,
+            "quick": FAST_CODER_MODEL,
+        }
+
+    return {
+        "general": FAST_CODER_MODEL,
+        "code": FAST_CODER_MODEL,
+        "architect": FAST_CODER_MODEL,
+        "vision": VISION_MODEL,
+        "quick": FAST_CODER_MODEL,
+    }
 
 
 def get_last_project_dir():
@@ -399,8 +466,9 @@ def load_project_context():
             pass
 
     context = "\n\n".join(parts).strip()
-    if len(context) > MAX_PROJECT_CONTEXT_CHARS:
-        context = context[:MAX_PROJECT_CONTEXT_CHARS] + "\n\n[Project context truncated. Run aicodex context again or ask about a specific file.]"
+    max_chars = max_project_context_chars()
+    if len(context) > max_chars:
+        context = context[:max_chars] + "\n\n[Project context truncated for performance mode. Run `aicodex mode full` for larger context or ask about a specific file.]"
 
     return str(project), context
 
@@ -581,7 +649,7 @@ def installed_models():
 
 
 def call_ollama(model, messages, temperature=0.2, timeout=420, use_project_context=True):
-    is_vision = model.startswith("qwen2.5vl")
+    is_vision = (model == VISION_MODEL)
 
     if use_project_context:
         messages = inject_project_context(messages)
@@ -615,11 +683,10 @@ You are a local AI model router.
 Decide whether to answer by yourself or forward to a specialist model.
 
 Available models:
-- qwen3:30b = general chat, explanation, documentation, normal technical questions
-- qwen3-coder:30b = code generation, repo changes, shell/zsh/bash/python/javascript/html/css, Jamf, Microsoft Graph API, macOS automation
-- deepseek-r1:32b = architecture, planning, review, root cause analysis, risk analysis, complex troubleshooting
+- qwen2.5-coder:14b = fast local coding/general fallback; lowest RAM/CPU
+- hf.co/unsloth/Qwen3-Coder-Next-GGUF:UD-Q2_K_XL = balanced Codex-like coding agent; repo understanding, scripts, docs, web projects
+- hf.co/unsloth/Qwen3-Coder-Next-GGUF:UD-Q4_K_M = full quality Codex-like coding agent; heavier RAM/CPU
 - qwen2.5vl:7b = image, screenshot, OCR, diagram, UI error, video frame
-- qwen2.5-coder:14b = quick snippets, small coding help, simple syntax fixes
 
 Return ONLY valid JSON:
 {{
@@ -629,11 +696,11 @@ Return ONLY valid JSON:
 }}
 
 Rules:
-- For code/script/repo tasks, prefer qwen3-coder:30b.
-- For planning/review/architecture, prefer deepseek-r1:32b.
+- For code/script/repo/project tasks, prefer the current mode code model from model_profile().
+- For planning/review/architecture, prefer the current mode architect model from model_profile().
 - For image/screenshot/video frame or messages with attached images, prefer qwen2.5vl:7b.
-- For small code snippets, use qwen2.5-coder:14b.
-- For normal explanation, use qwen3:30b.
+- For small code snippets, use the fast model.
+- For normal explanation, use the current mode general model from model_profile().
 - For questions about selected project files, website source code, folder structure, HTML/CSS/JS, or README, prefer qwen3-coder:30b.
 - Do not invent model names.
 
@@ -651,12 +718,23 @@ User request:
         decision = extract_json(content)
         if not decision:
             raise ValueError("Controller did not return valid JSON")
-        target = decision.get("target", "qwen3:30b")
+        target = decision.get("target", model_profile()["general"])
         if target not in ALLOWED_TARGETS:
-            target = "qwen3:30b"
-        return {"target": target, "reason": decision.get("reason", "No reason provided")}
+            target = model_profile()["general"]
+
+        # Performance-mode remap. This prevents the GUI from loading heavy models
+        # unless the user has explicitly selected full mode.
+        profile = model_profile()
+        if target in {"deepseek-r1:32b"}:
+            target = profile["architect"]
+        elif target in {"qwen3-coder:30b", BALANCED_CODER_MODEL, FULL_CODER_MODEL}:
+            target = profile["code"]
+        elif target in {"qwen3:30b", FAST_CODER_MODEL}:
+            target = profile["general"]
+
+        return {"target": target, "reason": decision.get("reason", "No reason provided") + f" | mode={get_performance_mode()}"}
     except Exception as error:
-        return {"target": "qwen3:30b", "reason": f"Controller failed, using general model: {error}"}
+        return {"target": model_profile()["general"], "reason": f"Controller failed, using general model in {get_performance_mode()} mode: {error}"}
 
 
 def failover_chain(primary):
@@ -668,7 +746,7 @@ def failover_chain(primary):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "controller": CONTROLLER_MODEL, "ollama": OLLAMA_URL}
+    return {"status": "ok", "controller": CONTROLLER_MODEL, "ollama": OLLAMA_URL, "performance_mode": get_performance_mode()}
 
 
 @app.get("/project")
@@ -678,6 +756,9 @@ def project():
         "project": project_dir,
         "context_loaded": bool(context),
         "context_chars": len(context or ""),
+        "performance_mode": get_performance_mode(),
+        "max_project_context_chars": max_project_context_chars(),
+        "model_profile": model_profile(),
     }
 
 
@@ -707,8 +788,8 @@ async def chat_completions(request: Request):
         # Hard rule: if any image is attached, do not ask a text-only controller to decide.
         # Send directly to the vision model.
         if has_image_payload(messages):
-            primary = "qwen2.5vl:7b"
-            reason = "Image attachment detected; using vision model"
+            primary = model_profile()["vision"]
+            reason = f"Image attachment detected; using vision model | mode={get_performance_mode()}"
         else:
             decision = ask_controller(messages_to_text(messages))
             primary = decision["target"]
@@ -718,7 +799,7 @@ async def chat_completions(request: Request):
         reason = "Manual model selected"
 
     if primary not in ALLOWED_TARGETS:
-        primary = "qwen3:30b"
+        primary = model_profile()["general"]
 
     chain = failover_chain(primary)
     errors = []
@@ -925,13 +1006,23 @@ LAST_PROJECT_FILE="$AICODEX_STATE/last_project"
 export PATH="$AICODEX_BIN:$AICODEX_NPM/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 export NPM_CONFIG_PREFIX="$AICODEX_NPM"
 
+# Optimized model set.
+# Do not pull several 30B/32B models by default; it causes RAM pressure and GUI timeouts.
+FAST_MODEL="qwen2.5-coder:14b"
+BALANCED_MODEL="hf.co/unsloth/Qwen3-Coder-Next-GGUF:UD-Q2_K_XL"
+FULL_MODEL="hf.co/unsloth/Qwen3-Coder-Next-GGUF:UD-Q4_K_M"
+VISION_MODEL="qwen2.5vl:7b"
+EMBED_MODEL="nomic-embed-text"
+
 MODELS=(
-  "qwen3:30b"
-  "qwen3-coder:30b"
-  "deepseek-r1:32b"
-  "qwen2.5vl:7b"
-  "nomic-embed-text"
-  "qwen2.5-coder:14b"
+  "$FAST_MODEL"
+  "$BALANCED_MODEL"
+  "$VISION_MODEL"
+  "$EMBED_MODEL"
+)
+
+OPTIONAL_FULL_MODELS=(
+  "$FULL_MODEL"
 )
 
 say() {
@@ -1069,9 +1160,7 @@ repair_tool() {
   model_choice="$(prompt "Enter option number: ")"
 
   if [ "$model_choice" = "1" ]; then
-    for model in "${MODELS[@]}"; do
-      ollama pull "$model" || true
-    done
+    pull_optimized_models "$(cat "$AICODEX_STATE/performance_mode" 2>/dev/null || echo fast)" || true
   fi
 
   start_router || true
@@ -1778,8 +1867,7 @@ run_full() {
   choice="$(prompt "Enter option number: ")"
 
   if [ "$choice" = "1" ]; then
-    cd "$(cat "$LAST_PROJECT_FILE")" || exit 1
-    "$AICODEX_VENVS/aider/bin/aider"
+    start_aider
   else
     echo "Use later: aicodex aider"
   fi
@@ -1793,9 +1881,35 @@ start_mcp() {
 
 start_aider() {
   [ -f "$LAST_PROJECT_FILE" ] || select_project
-  cd "$(cat "$LAST_PROJECT_FILE")" || exit 1
+  local project_dir
+  project_dir="$(cat "$LAST_PROJECT_FILE")"
+
+  cd "$project_dir" || exit 1
   [ -x "$AICODEX_VENVS/aider/bin/aider" ] || { echo "Aider venv missing. Run: aicodex repair"; exit 1; }
-  "$AICODEX_VENVS/aider/bin/aider"
+
+  prepare_project_files
+  project_context "$project_dir" >/dev/null 2>&1 || true
+
+  # Aider's ollama_chat provider expects this env var.
+  # Without it, Aider shows OLLAMA_API_BASE warnings.
+  export OLLAMA_API_BASE="http://127.0.0.1:11434"
+  export OLLAMA_HOST="http://127.0.0.1:11434"
+
+  local mode
+  mode="$(cat "$AICODEX_STATE/performance_mode" 2>/dev/null || echo fast)"
+
+  local aider_model="qwen2.5-coder:14b"
+  case "$mode" in
+    balanced) aider_model="hf.co/unsloth/Qwen3-Coder-Next-GGUF:UD-Q2_K_XL" ;;
+    full) aider_model="hf.co/unsloth/Qwen3-Coder-Next-GGUF:UD-Q4_K_M" ;;
+    *) aider_model="qwen2.5-coder:14b" ;;
+  esac
+
+  "$AICODEX_VENVS/aider/bin/aider" \
+    --config "$project_dir/.aider.conf.yml" \
+    --model "ollama_chat/$aider_model" \
+    --editor-model "ollama_chat/$aider_model" \
+    --no-show-model-warnings
 }
 
 
@@ -1820,8 +1934,129 @@ kill_aicodex() {
   echo "pkill -f 'ollama serve' 2>/dev/null"
 }
 
+
+
+set_performance_mode() {
+  local mode="${1:-}"
+
+  if [ -z "$mode" ]; then
+    echo "Current mode: $(cat "$AICODEX_STATE/performance_mode" 2>/dev/null || echo fast)"
+    echo ""
+    echo "Usage:"
+    echo "  aicodex mode fast"
+    echo "  aicodex mode balanced"
+    echo "  aicodex mode full"
+    echo ""
+    echo "fast     = lowest RAM/CPU, best for GUI and fewer timeouts"
+    echo "balanced = better coding quality, medium load"
+    echo "full     = heavy 30B/32B models, best quality but high RAM/CPU"
+    return 0
+  fi
+
+  case "$mode" in
+    fast|balanced|full)
+      echo "$mode" > "$AICODEX_STATE/performance_mode"
+      echo "AI Codex performance mode set to: $mode"
+      echo ""
+      echo "Restart AI Codex to apply:"
+      echo "  aicodex kill"
+    echo "  aicodex mode fast|balanced|full"
+    echo "  aicodex models"
+    echo "  aicodex pull-models [fast|balanced|full]"
+    echo "  aicodex tune"
+      echo "  aicodex run"
+      ;;
+    *)
+      echo "Invalid mode: $mode"
+      echo "Use: fast, balanced, or full"
+      return 1
+      ;;
+  esac
+}
+
+tune_aicodex() {
+  echo "AI Codex tuning recommendation"
+  echo ""
+  echo "For your current issue: high CPU/RAM and timeout"
+  echo "Recommended:"
+  echo "  aicodex mode fast"
+  echo "  aicodex kill"
+  echo "  aicodex run"
+  echo ""
+  echo "This reduces GUI routing to lighter models and smaller project context."
+  echo "Use Aider only when you need real file edits."
+}
+
+
+show_models() {
+  echo "AI Codex optimized model plan"
+  echo ""
+  echo "fast:"
+  echo "  qwen2.5-coder:14b"
+  echo ""
+  echo "balanced:"
+  echo "  hf.co/unsloth/Qwen3-Coder-Next-GGUF:UD-Q2_K_XL"
+  echo ""
+  echo "full:"
+  echo "  hf.co/unsloth/Qwen3-Coder-Next-GGUF:UD-Q4_K_M"
+  echo ""
+  echo "vision:"
+  echo "  qwen2.5vl:7b"
+  echo ""
+  echo "embedding:"
+  echo "  nomic-embed-text"
+  echo ""
+  echo "Current mode: $(cat "$AICODEX_STATE/performance_mode" 2>/dev/null || echo fast)"
+}
+
+pull_optimized_models() {
+  local mode="${1:-$(cat "$AICODEX_STATE/performance_mode" 2>/dev/null || echo fast)}"
+
+  start_ollama || return 1
+
+  echo "Pulling optimized AI Codex models for mode: $mode"
+  echo ""
+
+  case "$mode" in
+    fast)
+      ollama pull "qwen2.5-coder:14b" || return 1
+      ollama pull "qwen2.5vl:7b" || true
+      ollama pull "nomic-embed-text" || true
+      ;;
+    balanced)
+      ollama pull "qwen2.5-coder:14b" || return 1
+      ollama pull "hf.co/unsloth/Qwen3-Coder-Next-GGUF:UD-Q2_K_XL" || return 1
+      ollama pull "qwen2.5vl:7b" || true
+      ollama pull "nomic-embed-text" || true
+      ;;
+    full)
+      ollama pull "qwen2.5-coder:14b" || return 1
+      ollama pull "hf.co/unsloth/Qwen3-Coder-Next-GGUF:UD-Q4_K_M" || return 1
+      ollama pull "qwen2.5vl:7b" || true
+      ollama pull "nomic-embed-text" || true
+      ;;
+    *)
+      echo "Invalid mode: $mode"
+      echo "Use: fast, balanced, or full"
+      return 1
+      ;;
+  esac
+}
+
+show_env_help() {
+  echo "AI Codex environment:"
+  echo "OLLAMA_API_BASE=${OLLAMA_API_BASE:-not set}"
+  echo "OLLAMA_HOST=${OLLAMA_HOST:-not set}"
+  echo ""
+  echo "For current terminal, run:"
+  echo "export OLLAMA_API_BASE=http://127.0.0.1:11434"
+  echo "export OLLAMA_HOST=http://127.0.0.1:11434"
+}
+
 status_tool() {
   echo "AI Codex Status"
+  echo ""
+  echo "Performance mode: $(cat "$AICODEX_STATE/performance_mode" 2>/dev/null || echo fast)"
   echo ""
 
   local py
@@ -1857,6 +2092,11 @@ case "$1" in
   mcp) start_mcp ;;
   archive) archive_project_memory ;;
   kill) kill_aicodex ;;
+  mode) set_performance_mode "$2" ;;
+  tune) tune_aicodex ;;
+  models) show_models ;;
+  pull-models) pull_optimized_models "$2" ;;
+  env) show_env_help ;;
   status) status_tool ;;
   *)
     echo "Usage:"
@@ -1872,6 +2112,7 @@ case "$1" in
     echo "  aicodex mcp"
     echo "  aicodex archive"
     echo "  aicodex kill"
+    echo "  aicodex env"
     echo "  aicodex status"
     ;;
 esac
