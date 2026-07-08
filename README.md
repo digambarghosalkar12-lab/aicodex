@@ -251,8 +251,8 @@ Design principles:
 Download the installer:
 
 ```bash
-chmod +x ~/Downloads/aicodex-install-brew-v3.1-qwen-next.sh
-~/Downloads/aicodex-install-brew-v3.1-qwen-next.sh
+chmod +x ~/Downloads/aicodex-install.sh
+~/Downloads/aicodex-install.sh
 source ~/.zshrc
 ```
 
