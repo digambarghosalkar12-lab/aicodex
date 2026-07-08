@@ -330,12 +330,17 @@ EOF
 
   write_file "$AICODEX_ROUTER/router.py" <<'PYEOF'
 from fastapi import FastAPI, Request
+from pathlib import Path
 import requests
 import json
 import re
 
 OLLAMA_URL = "http://127.0.0.1:11434"
 CONTROLLER_MODEL = "qwen3:30b"
+
+AICODEX_HOME = Path.home() / ".aicodex-level1"
+LAST_PROJECT_FILE = AICODEX_HOME / "state" / "last_project"
+MAX_PROJECT_CONTEXT_CHARS = 120000
 
 ALLOWED_TARGETS = {
     "qwen3:30b",
@@ -356,18 +361,199 @@ FAILOVER_MAP = {
 app = FastAPI(title="AI Codex Smart Local Router")
 
 
+def get_last_project_dir():
+    try:
+        if LAST_PROJECT_FILE.exists():
+            project = Path(LAST_PROJECT_FILE.read_text().strip()).expanduser()
+            if project.exists() and project.is_dir():
+                return project
+    except Exception:
+        return None
+    return None
+
+
+def load_project_context():
+    """
+    Load generated project context so Open WebUI smart-auto can answer about
+    the selected project without the user pasting files manually.
+
+    This is read-only context. Real file editing still belongs to Aider.
+    """
+    project = get_last_project_dir()
+    if not project:
+        return None, ""
+
+    context_file = project / ".ai-memory" / "project-context.md"
+    tree_file = project / ".ai-memory" / "project-tree.md"
+
+    parts = []
+    if context_file.exists():
+        try:
+            parts.append(context_file.read_text(errors="ignore"))
+        except Exception:
+            pass
+    elif tree_file.exists():
+        try:
+            parts.append(tree_file.read_text(errors="ignore"))
+        except Exception:
+            pass
+
+    context = "\n\n".join(parts).strip()
+    if len(context) > MAX_PROJECT_CONTEXT_CHARS:
+        context = context[:MAX_PROJECT_CONTEXT_CHARS] + "\n\n[Project context truncated. Run aicodex context again or ask about a specific file.]"
+
+    return str(project), context
+
+
+def inject_project_context(messages):
+    project_dir, context = load_project_context()
+    if not context:
+        return messages
+
+    system_context = f"""You are AI Codex running locally.
+
+You have read-only access to a generated snapshot of the selected project folder.
+
+Selected project:
+{project_dir}
+
+Use this project snapshot to answer questions about files, folder structure, code, HTML/CSS/JS, scripts, README, and project behavior.
+
+Important limits:
+- You can understand and discuss the generated snapshot.
+- You cannot see the live browser screen unless the user uploads a screenshot.
+- You cannot directly edit files from Open WebUI chat.
+- For real file edits, tell the user to run: aicodex aider
+- If the snapshot may be outdated, tell the user to run: aicodex context
+
+Project snapshot:
+{context}
+"""
+
+    return [{"role": "system", "content": system_context}] + messages
+
+
+def _image_url_to_base64(value):
+    """
+    Accept OpenAI/Open WebUI image_url values and return raw base64 for Ollama.
+    Supports:
+    - {"url": "data:image/png;base64,...."}
+    - "data:image/png;base64,...."
+    Remote http(s) image URLs are intentionally ignored for local/offline safety.
+    """
+    if isinstance(value, dict):
+        value = value.get("url", "")
+    if not isinstance(value, str):
+        return None
+    if value.startswith("data:image") and "base64," in value:
+        return value.split("base64,", 1)[1]
+    return None
+
+
+def normalize_messages_for_ollama(messages, vision=False):
+    """
+    Open WebUI/OpenAI messages can contain content as a list:
+      [{"type":"text","text":"..."}, {"type":"image_url","image_url": {...}}]
+
+    Ollama /api/chat expects:
+      {"role":"user","content":"text","images":["base64..."]}
+
+    Without this conversion Ollama returns:
+      400 Client Error: Bad Request for /api/chat
+    """
+    normalized = []
+
+    for msg in messages:
+        role = msg.get("role", "user")
+        if role not in {"system", "user", "assistant", "tool"}:
+            role = "user"
+
+        content = msg.get("content", "")
+        text_parts = []
+        images = []
+
+        if isinstance(content, list):
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+
+                item_type = item.get("type")
+                if item_type == "text":
+                    text_parts.append(str(item.get("text", "")))
+
+                elif item_type == "image_url":
+                    image_b64 = _image_url_to_base64(item.get("image_url"))
+                    if image_b64:
+                        images.append(image_b64)
+
+                elif item_type == "image":
+                    image_b64 = _image_url_to_base64(item.get("image_url") or item.get("source") or item.get("data"))
+                    if image_b64:
+                        images.append(image_b64)
+
+                else:
+                    # Keep unknown content as readable text instead of passing invalid JSON to Ollama.
+                    if "text" in item:
+                        text_parts.append(str(item.get("text", "")))
+        else:
+            text_parts.append(str(content or ""))
+
+        new_msg = {
+            "role": role,
+            "content": "\n".join(part for part in text_parts if part).strip(),
+        }
+
+        if vision and images:
+            new_msg["images"] = images
+
+        # Ollama can reject completely empty messages.
+        if new_msg["content"] or new_msg.get("images"):
+            normalized.append(new_msg)
+
+    return normalized or [{"role": "user", "content": ""}]
+
+
+def has_image_payload(messages):
+    """
+    Detect image attachments before asking the controller.
+    This avoids the controller accidentally selecting a text-only model.
+    """
+    for msg in messages:
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                item_type = item.get("type", "")
+                if item_type in {"image_url", "image"}:
+                    return True
+                if item.get("image_url") or item.get("source") or item.get("data"):
+                    return True
+    return False
+
+
 def messages_to_text(messages):
     output = []
     for msg in messages:
         role = msg.get("role", "user")
         content = msg.get("content", "")
+        text_parts = []
+        image_found = False
+
         if isinstance(content, list):
-            content = "\n".join(
-                item.get("text", "")
-                for item in content
-                if item.get("type") == "text"
-            )
-        output.append(f"{role.upper()}: {content}")
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") == "text":
+                    text_parts.append(str(item.get("text", "")))
+                elif item.get("type") in {"image_url", "image"} or item.get("image_url") or item.get("source") or item.get("data"):
+                    image_found = True
+        else:
+            text_parts.append(str(content or ""))
+
+        image_note = " [image attached]" if image_found else ""
+        output.append(f"{role.upper()}: {' '.join(text_parts).strip()}{image_note}")
+
     return "\n\n".join(output)
 
 
@@ -394,19 +580,31 @@ def installed_models():
         return set()
 
 
-def call_ollama(model, messages, temperature=0.2, timeout=420):
+def call_ollama(model, messages, temperature=0.2, timeout=420, use_project_context=True):
+    is_vision = model.startswith("qwen2.5vl")
+
+    if use_project_context:
+        messages = inject_project_context(messages)
+
+    ollama_messages = normalize_messages_for_ollama(messages, vision=is_vision)
+
     payload = {
         "model": model,
-        "messages": messages,
+        "messages": ollama_messages,
         "stream": False,
         "options": {"temperature": temperature},
     }
+
     response = requests.post(
         f"{OLLAMA_URL}/api/chat",
         json=payload,
         timeout=timeout,
     )
-    response.raise_for_status()
+
+    if response.status_code >= 400:
+        detail = response.text[:800]
+        raise RuntimeError(f"{response.status_code} from Ollama /api/chat: {detail}")
+
     return response.json().get("message", {}).get("content", "")
 
 
@@ -433,9 +631,10 @@ Return ONLY valid JSON:
 Rules:
 - For code/script/repo tasks, prefer qwen3-coder:30b.
 - For planning/review/architecture, prefer deepseek-r1:32b.
-- For image/screenshot/video frame, prefer qwen2.5vl:7b.
+- For image/screenshot/video frame or messages with attached images, prefer qwen2.5vl:7b.
 - For small code snippets, use qwen2.5-coder:14b.
 - For normal explanation, use qwen3:30b.
+- For questions about selected project files, website source code, folder structure, HTML/CSS/JS, or README, prefer qwen3-coder:30b.
 - Do not invent model names.
 
 User request:
@@ -447,6 +646,7 @@ User request:
             [{"role": "user", "content": prompt}],
             temperature=0,
             timeout=180,
+            use_project_context=False,
         )
         decision = extract_json(content)
         if not decision:
@@ -469,6 +669,16 @@ def failover_chain(primary):
 @app.get("/health")
 def health():
     return {"status": "ok", "controller": CONTROLLER_MODEL, "ollama": OLLAMA_URL}
+
+
+@app.get("/project")
+def project():
+    project_dir, context = load_project_context()
+    return {
+        "project": project_dir,
+        "context_loaded": bool(context),
+        "context_chars": len(context or ""),
+    }
 
 
 @app.get("/v1/models")
@@ -494,9 +704,15 @@ async def chat_completions(request: Request):
     temperature = body.get("temperature", 0.2)
 
     if requested_model == "smart-auto":
-        decision = ask_controller(messages_to_text(messages))
-        primary = decision["target"]
-        reason = decision["reason"]
+        # Hard rule: if any image is attached, do not ask a text-only controller to decide.
+        # Send directly to the vision model.
+        if has_image_payload(messages):
+            primary = "qwen2.5vl:7b"
+            reason = "Image attachment detected; using vision model"
+        else:
+            decision = ask_controller(messages_to_text(messages))
+            primary = decision["target"]
+            reason = decision["reason"]
     else:
         primary = requested_model
         reason = "Manual model selected"
@@ -1385,6 +1601,163 @@ launch_gui() {
   echo "Router API: http://127.0.0.1:5050/v1"
 }
 
+
+project_context() {
+  local project_dir="${1:-}"
+
+  if [ -z "$project_dir" ]; then
+    if [ -f "$LAST_PROJECT_FILE" ]; then
+      project_dir="$(cat "$LAST_PROJECT_FILE")"
+    fi
+  fi
+
+  if [ -z "$project_dir" ] || [ ! -d "$project_dir" ]; then
+    echo "No project selected."
+    echo "Run: aicodex project"
+    return 1
+  fi
+
+  local memory_dir="$project_dir/.ai-memory"
+  mkdir -p "$memory_dir"
+
+  local context_file="$memory_dir/project-context.md"
+  local tree_file="$memory_dir/project-tree.md"
+
+  echo "Building project context for:"
+  echo "$project_dir"
+  echo ""
+
+  {
+    echo "# Project Context"
+    echo ""
+    echo "Generated: $(date)"
+    echo "Project: $project_dir"
+    echo ""
+    echo "This file is generated by AI Codex so local AI tools can understand the project folder."
+    echo ""
+    echo "## Project Tree"
+    echo ""
+    echo '```text'
+    find "$project_dir" \
+      -path "*/.git" -prune -o \
+      -path "*/node_modules" -prune -o \
+      -path "*/vendor" -prune -o \
+      -path "*/dist" -prune -o \
+      -path "*/build" -prune -o \
+      -path "*/.next" -prune -o \
+      -path "*/.venv" -prune -o \
+      -path "*/venv" -prune -o \
+      -path "*/__pycache__" -prune -o \
+      -path "*/.aicodex-cache" -prune -o \
+      -type f -print | sed "s#^$project_dir/##" | sort | head -500
+    echo '```'
+    echo ""
+
+    echo "## Important Files Preview"
+    echo ""
+
+    local count=0
+    while IFS= read -r file; do
+      rel="${file#$project_dir/}"
+
+      case "$rel" in
+        *.png|*.jpg|*.jpeg|*.gif|*.webp|*.ico|*.icns|*.zip|*.tar|*.gz|*.dmg|*.pkg|*.mp4|*.mov|*.mp3|*.pdf)
+          continue
+          ;;
+      esac
+
+      case "$rel" in
+        */.git/*|*/node_modules/*|*/vendor/*|*/dist/*|*/build/*|*/.next/*|*/.venv/*|*/venv/*|*/__pycache__/*)
+          continue
+          ;;
+      esac
+
+      if [ "$count" -ge 80 ]; then
+        break
+      fi
+
+      if [ -f "$file" ]; then
+        size="$(wc -c < "$file" 2>/dev/null | tr -d ' ')"
+        if [ "${size:-0}" -gt 30000 ]; then
+          echo "### $rel"
+          echo ""
+          echo "Skipped preview because file is large: ${size} bytes"
+          echo ""
+          continue
+        fi
+
+        echo "### $rel"
+        echo ""
+        echo '```'
+        sed -n '1,160p' "$file" 2>/dev/null
+        echo '```'
+        echo ""
+
+        count=$((count + 1))
+      fi
+    done < <(find "$project_dir" \
+      -path "*/.git" -prune -o \
+      -path "*/node_modules" -prune -o \
+      -path "*/vendor" -prune -o \
+      -path "*/dist" -prune -o \
+      -path "*/build" -prune -o \
+      -path "*/.next" -prune -o \
+      -path "*/.venv" -prune -o \
+      -path "*/venv" -prune -o \
+      -path "*/__pycache__" -prune -o \
+      -type f -print | sort)
+
+  } > "$context_file"
+
+  {
+    echo "# Project Tree"
+    echo ""
+    echo '```text'
+    find "$project_dir" \
+      -path "*/.git" -prune -o \
+      -path "*/node_modules" -prune -o \
+      -path "*/vendor" -prune -o \
+      -path "*/dist" -prune -o \
+      -path "*/build" -prune -o \
+      -path "*/.next" -prune -o \
+      -path "*/.venv" -prune -o \
+      -path "*/venv" -prune -o \
+      -path "*/__pycache__" -prune -o \
+      -type f -print | sed "s#^$project_dir/##" | sort
+    echo '```'
+  } > "$tree_file"
+
+  cat > "$memory_dir/how-to-use-project-context.md" <<EOF
+# How AI Codex Uses This Project
+
+AI Codex has generated these files:
+
+- .ai-memory/project-context.md
+- .ai-memory/project-tree.md
+
+For best Codex-like behavior:
+
+1. Use \`aicodex aider\` for real repo editing.
+   Aider runs inside the selected project folder and can read/edit files.
+
+2. Use Open WebUI \`smart-auto\` for planning, explanation, and quick help.
+
+3. When asking GUI to work with the project, paste or attach:
+   \`.ai-memory/project-context.md\`
+
+4. Regenerate context after major project changes:
+   \`aicodex context\`
+
+EOF
+
+  echo "✓ Project context generated:"
+  echo "$context_file"
+  echo "$tree_file"
+  echo ""
+  echo "For real Codex-like file editing, run:"
+  echo "aicodex aider"
+}
+
 run_full() {
   trap archive_project_memory EXIT
 
@@ -1478,6 +1851,8 @@ case "$1" in
   repair) repair_tool ;;
   reset) reset_tool ;;
   project) select_project ;;
+  context) project_context ;;
+  analyze) project_context ;;
   aider) start_aider ;;
   mcp) start_mcp ;;
   archive) archive_project_memory ;;
@@ -1491,6 +1866,8 @@ case "$1" in
     echo "  aicodex repair"
     echo "  aicodex reset"
     echo "  aicodex project"
+    echo "  aicodex context"
+    echo "  aicodex analyze"
     echo "  aicodex aider"
     echo "  aicodex mcp"
     echo "  aicodex archive"
