@@ -473,10 +473,16 @@ def health():
 
 @app.get("/v1/models")
 def models():
+    # Expose only smart-auto to GUI users.
+    # Internal specialist models are selected by the router, not manually by users.
     return {
         "object": "list",
-        "data": [{"id": "smart-auto", "object": "model"}]
-        + [{"id": model, "object": "model"} for model in sorted(ALLOWED_TARGETS)],
+        "data": [
+            {
+                "id": "smart-auto",
+                "object": "model"
+            }
+        ],
     }
 
 
@@ -949,15 +955,31 @@ start_openwebui() {
     return 1
   fi
 
-  say "Starting Open WebUI"
+  say "Starting Open WebUI in AI Codex auto-router mode"
 
-  nohup "$AICODEX_VENVS/openwebui/bin/open-webui" serve \
+  # Force Open WebUI to use only the AI Codex OpenAI-compatible router.
+  # This hides/bypasses direct Ollama model selection and keeps users on smart-auto.
+  # ENABLE_PERSISTENT_CONFIG=false makes env config win over old saved UI settings.
+  env \
+    ENABLE_PERSISTENT_CONFIG=false \
+    RESET_CONFIG_ON_START=true \
+    ENABLE_OLLAMA_API=false \
+    ENABLE_OPENAI_API=true \
+    OPENAI_API_BASE_URL="http://127.0.0.1:5050/v1" \
+    OPENAI_API_BASE_URLS="http://127.0.0.1:5050/v1" \
+    OPENAI_API_KEY="local" \
+    OPENAI_API_KEYS="local" \
+    DEFAULT_MODELS="smart-auto" \
+    DEFAULT_PINNED_MODELS="smart-auto" \
+    TASK_MODEL_EXTERNAL="smart-auto" \
+    WEBUI_NAME="AI Codex" \
+    "$AICODEX_VENVS/openwebui/bin/open-webui" serve \
     > "$AICODEX_LOGS/open-webui.log" 2>&1 &
 
   sleep 12
 
   if curl -s http://127.0.0.1:8080 >/dev/null 2>&1; then
-    echo "✓ Open WebUI started"
+    echo "✓ Open WebUI started in smart-auto mode"
     return 0
   fi
 
@@ -1018,6 +1040,14 @@ validate_tool() {
   done
 
   start_router || return 1
+
+  local router_models
+  router_models="$(curl -s http://127.0.0.1:5050/v1/models 2>/dev/null || true)"
+  echo "$router_models" | grep -q "smart-auto" || {
+    echo "Router is not exposing smart-auto correctly."
+    return 1
+  }
+
   echo "✓ Tool validation completed"
 }
 
@@ -1350,10 +1380,9 @@ launch_gui() {
   echo "✓ GUI launched"
   echo "Open WebUI: http://127.0.0.1:8080"
   echo "Router API: http://127.0.0.1:5050/v1"
-  echo "Open WebUI connection:"
-  echo "Base URL: http://127.0.0.1:5050/v1"
-  echo "API Key: local"
-  echo "Model: smart-auto"
+  echo "Open WebUI is launched in auto-router mode."
+  echo "Only model users should use: smart-auto"
+  echo "Router API: http://127.0.0.1:5050/v1"
 }
 
 run_full() {
@@ -1396,6 +1425,28 @@ start_aider() {
   "$AICODEX_VENVS/aider/bin/aider"
 }
 
+
+kill_aicodex() {
+  echo "Stopping AI Codex processes..."
+
+  # Stop AI Codex web UI, router, MCP, and any process launched from the tool folder.
+  pkill -f "open-webui" 2>/dev/null || true
+  pkill -f "uvicorn router:app" 2>/dev/null || true
+  pkill -f "safe_tools.py" 2>/dev/null || true
+  pkill -f ".aicodex-level1" 2>/dev/null || true
+
+  # Free known AI Codex ports.
+  lsof -tiTCP:5050 -sTCP:LISTEN 2>/dev/null | xargs kill -9 2>/dev/null || true
+  lsof -tiTCP:8080 -sTCP:LISTEN 2>/dev/null | xargs kill -9 2>/dev/null || true
+
+  echo ""
+  echo "AI Codex user-space processes cleaned."
+  echo ""
+  echo "Ollama model engine was not stopped."
+  echo "To stop Ollama also, run:"
+  echo "pkill -f 'ollama serve' 2>/dev/null"
+}
+
 status_tool() {
   echo "AI Codex Status"
   echo ""
@@ -1430,6 +1481,7 @@ case "$1" in
   aider) start_aider ;;
   mcp) start_mcp ;;
   archive) archive_project_memory ;;
+  kill) kill_aicodex ;;
   status) status_tool ;;
   *)
     echo "Usage:"
@@ -1442,6 +1494,7 @@ case "$1" in
     echo "  aicodex aider"
     echo "  aicodex mcp"
     echo "  aicodex archive"
+    echo "  aicodex kill"
     echo "  aicodex status"
     ;;
 esac
